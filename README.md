@@ -80,6 +80,8 @@ persistent unless `--save` is given as well.
 Disable the test targets entirely with `-DBUILD_TESTING=OFF`.
 See `docs/testing/catch2-unit-test-spec.md` for the test plan.
 
+For protocol details and command syntax, see [AT protocol](docs/at-protocol.md).
+
 ## Usage
 
 Show help:
