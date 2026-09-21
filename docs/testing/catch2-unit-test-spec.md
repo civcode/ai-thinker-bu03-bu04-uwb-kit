@@ -164,8 +164,12 @@ Required capabilities:
 Required capabilities:
 - obtain serial device path from config/env/CMake cache
 - open real UART safely
-- optionally snapshot device configuration before mutation
-- support best-effort restore of original state after tests
+- stay read-only by default: no `save`, `restart`, `restore` or mode change, because those wipe the
+  user's configuration and reset the module; mutating cases need an explicit opt-in env flag
+- prove the port is quiet before handing it to `DeviceHandler`, using a bounded configurable listen
+  window (`UWB_HIL_CHATTER_WINDOW_MS`, 0 disables the check) rather than fixed sleeps
+- consume each command's `OK`/`ERR` terminator so the next reader is not off by one line
+- explain a skip with the measured device behaviour and the command that fixes it
 - skip tests cleanly if no hardware is available
 
 ## 4.4 Conventions
@@ -480,6 +484,89 @@ These tests intentionally document current behavior, including behavior that may
 5. **Integration/HIL note**: code checks `result.count("set_cfg")` but no `set_cfg` option is declared.
 
 These should be preserved as explicit tests or tracked issues before refactoring.
+
+### 7.1 Measured behaviour on real hardware (2026-09-21, BU03/BU04 at 115200 baud)
+
+Observed while bringing up `tests/hil/`. Items 1-4 are the device behaviour and the open
+product issues, item 5 is what the HIL fixture does about it, item 6 is the recommended product
+fix, items 7-9 are harness facts (7 is also a defect that was fixed).
+
+1. **Unsolicited output on the protocol UART.** The module pushes GBK status text
+   (`\xbc\xd3\xc8\xeb...` = "加入网络超时或者接收错误", ~ "join-network timeout or receive error",
+   25 bytes per line) roughly every 500-1000 ms while idle. Measured 75 bytes in a 1500 ms
+   idle window. It follows the stored device configuration, **not** the UWB mode: switching the
+   mode to TWR (`AT+SETUWBMODE=0`) left the output running (75 bytes in 1500 ms), while a
+   factory restore (`AT+RESTORE`, i.e. `./build/cli --restore`) silenced the port completely -
+   measured 0 bytes in a 4 s raw `cat` listen and 0 bytes in the fixture's 1500 ms window, with
+   `AT+GETUWBMODE` reporting `twr` afterwards.
+2. **Answer framing.** A command answer arrives as its own burst, e.g.
+   `0d 0d "twr_pdoa_mode: 0" 0d 0a 0a "OK" 0d 0a`, but the payload line and the trailing
+   `OK` are sometimes separated by more than 50 ms, which is the inter-byte timeout used by
+   `Uart::read()` - the read then stops after the payload and the `OK` is left in the buffer.
+3. **`HandleComm()` desyncs.** `DeviceHandler::HandleComm()` performs a single `readText()`
+   per command and parses whatever arrives, so a leftover `OK` or an interleaved status line
+   becomes the answer to the *next* command. `./build/cli --device /dev/ttyUSB0 --print` in
+   PDOA mode failed 5 out of 5 runs this way (`Failed to extract data with prefix: getver
+   software:`, `Failed to extract data with prefix: workmode:`, `Failed to retrieve device
+   configuration.`).
+4. **Exit code hides it.** The CLI prints those failures but still exits 0, so neither a
+   shell script nor CTest can detect the failure (see §6.7, HIL observability).
+5. **Fixture behaviour (current state of `tests/fixtures/hil_fixture.hpp`).** The fixture talks
+   to the device with `HilRawRequest()`, which reads until a line carrying the expected prefix
+   arrives and discards everything else, then quiesces the port (drain, then a 1500 ms idle
+   listen) and reports the measured chatter. On a chatty device that was enough for the harness
+   (8 consecutive passing runs) while the CLI failed 5 out of 5 - the difference was framing and
+   quiescing, not the mode. Today the suite does not rely on that: it skips when chatter is
+   measured, and asserts strictly on a quiet device.
+6. **Recommended product fix (not applied).** Items 2-4 still make the CLI unreliable on a
+   chatty device, which is a state a user can be in without any warning. In `HandleComm()`:
+   flush the RX buffer before writing (the "Purge uart buffers" block in
+   `src/device_handler.cpp` is commented out) and accumulate reads until a terminator line
+   (`OK` / `ERR`) is seen instead of taking a single read. Apply it together with a fix for
+   item 4.
+7. **Fixed: `Uart` double close.** The defaulted move constructor/assignment copied `fd_`
+   without clearing the source, so a moved `Uart` closed the same descriptor twice
+   (`tcflush failed: Bad file descriptor`, `UART poll reported an error`). Custom move
+   operations now hand the descriptor over and reset the source. `#include <thread>` was also
+   missing in `include/transport/uart.hpp` for `std::this_thread::sleep_for`.
+8. **HIL prep: restore the device.** `./build/cli --device /dev/ttyUSB0 --export backup.json`
+   followed by `./build/cli --device /dev/ttyUSB0 --restore` puts the device in the quiet state,
+   which is what the read-only HIL cases expect; `Restore` is a configuration-wiping command, so
+   export first and do not run it as part of a read-only test. When the port is chatty again,
+   the read-only cases skip and print the measured chatter plus this remedy instead of failing.
+9. **Mode changes reset the module.** `AT+SETUWBMODE=...` restarts the module and drops the
+   serial link: the open descriptor reports `POLLERR`/`POLLHUP` and the next read throws. Any
+   code that changes the UWB mode must close the port, wait (0.5-2 s) and reopen before
+   continuing. `cli --uwb_mode` does not persist the change unless `--save` is also given.
+
+10. **Fixture waiting is a silence proof, not a fixed pause.** Proving the port is quiet costs one
+    listen window per test process (`catch_discover_tests` runs each case in its own process, so the
+    fixture's per-process chatter cache does not help CTest). The window is `UWB_HIL_CHATTER_WINDOW_MS`
+    (default 1200 ms; the measured chatter period on this device is 500-1000 ms):
+
+    | configuration | `ctest -L hil` on this device |
+    | --- | --- |
+    | previous fixture (mode switching + fixed post-probe drains) | 29 s |
+    | window 1200 ms (default) | 12.5 s |
+    | window 400 ms | 8.5 s |
+    | window 0, gate disabled | 6.4 s |
+
+    Detection was checked against a simulated device that streams the 25-byte GBK status line: with a
+    1200 ms or 800 ms window the gate tripped for chatter periods of 500, 700, 1000 and 1300 ms; a
+    400 ms window missed the 1000 ms period and the strict framing case then failed; with the gate
+    disabled every chatty run failed. Keep the window at 800 ms or above, and use 0 only when the
+    device is known to be restored and quiet.
+
+    The remaining ~6 s is product pacing, not fixture waiting: each command costs a 5 ms per byte write
+    throttle plus the unconditional 100 ms sleep in `HandleComm()`, and `GetDeviceConfiguration()`
+    issues eight commands. Making that sleep and throttle adaptive would bring the HIL suite to about
+    3 s, but that changes product behaviour (see item 6).
+
+    Fixture constants are in `tests/fixtures/hil_fixture.hpp`: `kHilResponseTimeout` 400 ms,
+    `kHilGapTimeout` 150 ms (wider than the product's 50 ms so a split answer is still read as one
+    answer), `kHilProbeBudget` 1500 ms, `kHilDrainTimeout` 100 ms. `HilRawRequest()` now consumes the
+    answer's own `OK`/`ERR` line and returns as soon as it arrives instead of waiting out a fixed tail,
+    and idle chatter is measured with a single read instead of a loop of short reads.
 
 ---
 

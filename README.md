@@ -13,7 +13,7 @@ CLI utility for communicating with the AI-Thinker BU03 / BU04 UWB kit over a ser
 
 ## Requirements
 
-- CMake 3.0+
+- CMake 3.20+
 - A C++20 compiler
 - A connected serial device such as `/dev/ttyUSB0`
 
@@ -23,6 +23,62 @@ CLI utility for communicating with the AI-Thinker BU03 / BU04 UWB kit over a ser
 cmake -S . -B build
 cmake --build build -j
 ```
+
+## Tests
+
+Unit tests (Catch2, fetched with CMake `FetchContent`) are configured by default and need
+no hardware:
+
+```bash
+ctest --test-dir build --output-on-failure      # or: ctest --test-dir build -L unit
+```
+
+Hardware-in-the-loop tests are opt-in and require a connected BU03/BU04:
+
+```bash
+cmake -S . -B build -DENABLE_HIL_TESTS=ON -DHIL_SERIAL_DEVICE=/dev/ttyUSB0
+cmake --build build -j
+ctest --test-dir build -L hil --output-on-failure
+```
+
+HIL runtime overrides:
+
+- `UWB_HIL_SERIAL_DEVICE` - serial device path (overrides `HIL_SERIAL_DEVICE`)
+- `UWB_HIL_REQUIRE_AVAILABILITY=1` - make a missing HIL device fail instead of skip
+- `UWB_HIL_CHATTER_WINDOW_MS` - how long each HIL case listens for unsolicited device output before trusting the port; `0` disables the check (fastest run, only for a restored/quiet device)
+- `UWB_HIL_REMEASURE_CHATTER=1` - re-measure device chatter in every case instead of once per test binary
+- `UWB_HIL_ENABLE_STATEFUL=1` - allow state-changing HIL tests (reserved for future tests)
+- `UWB_HIL_ENABLE_DESTRUCTIVE=1` - allow destructive HIL tests (reserved for future tests)
+
+The read-only cases never write to the device and expect a quiet one. A module holding a
+configuration it cannot bring up (e.g. a PDOA network it never joins) streams GBK status text on
+the same UART as the AT protocol, which breaks `DeviceHandler`'s one-read-per-command flow. Put
+the device in the quiet state first:
+
+```bash
+./build/cli --device /dev/ttyUSB0 --export backup.json   # keep the current configuration
+./build/cli --device /dev/ttyUSB0 --restore             # stops the unsolicited output
+```
+
+Each case opens the port, reads `AT+GETUWBMODE` with its own framing (so the mode is reported even
+on a chatty device, and the answer's `OK` line is consumed rather than left for the next reader),
+then listens for `UWB_HIL_CHATTER_WINDOW_MS` (default 1200 ms). If that listen sees unsolicited
+output, the cases skip with the measurement and the remedy above instead of failing. The measured
+behaviour and the `HandleComm()` framing issue it exposes are recorded in
+`docs/testing/catch2-unit-test-spec.md` §7.1.
+
+That listen is where most of the HIL run time goes — about 12 s for the five cases, because
+`catch_discover_tests` gives each case its own process. On a device you have just restored, run
+`UWB_HIL_CHATTER_WINDOW_MS=0 ctest --test-dir build -L hil` for the same assertions in about 6 s.
+The remaining time is the product's own pacing: a 5 ms per byte write throttle plus an unconditional
+100 ms sleep after every command, eight commands for `GetDeviceConfiguration()`.
+
+Changing the UWB mode (`./build/cli --uwb_mode 0`) is not a way to get a quiet port: it restarts
+the module, drops the serial link for a second, leaves the status output running, and is not
+persistent unless `--save` is given as well.
+
+Disable the test targets entirely with `-DBUILD_TESTING=OFF`.
+See `docs/testing/catch2-unit-test-spec.md` for the test plan.
 
 ## Usage
 
