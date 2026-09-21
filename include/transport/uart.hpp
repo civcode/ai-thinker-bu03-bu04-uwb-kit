@@ -13,6 +13,7 @@
 
 #include <chrono>
 #include <span>
+#include <thread>
 #include <vector>
 
 #include "transport/iuart.hpp"
@@ -47,8 +48,25 @@ public:
     Uart(const Uart&) = delete;
     Uart& operator=(const Uart&) = delete;
 
-    Uart(Uart&&) noexcept = default;
-    Uart& operator=(Uart&&) noexcept = default;
+    // Not defaulted on purpose: a defaulted move copies fd_ and leaves the source with the
+    // same descriptor, so both destructors close it (second close -> EBADF on the survivor).
+    Uart(Uart&& other) noexcept
+        : fd_(other.fd_)
+    {
+        other.fd_ = -1;
+    }
+
+    Uart& operator=(Uart&& other) noexcept
+    {
+        if (this != &other) {
+            if (fd_ >= 0) {
+                ::close(fd_);
+            }
+            fd_ = other.fd_;
+            other.fd_ = -1;
+        }
+        return *this;
+    }
 
     void flushUartBuffers()
     {
