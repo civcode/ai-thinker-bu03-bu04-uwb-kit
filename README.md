@@ -156,4 +156,4 @@ Read and export configuration in one command:
 
 ## License
 
-Add your license here.
+This project is licensed under the [MIT License](LICENSE).
