@@ -1,0 +1,23 @@
+# Build artifacts
+/build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+Makefile
+
+# Editor/OS files
+.DS_Store
+*.swp
+*.swo
+
+# Local shell/user environment files accidentally present in workspace
+.bash_profile
+.bashrc
+.env
+.gitconfig
+.mcp.json
+.profile
+.ripgreprc
+.zprofile
+.zshrc

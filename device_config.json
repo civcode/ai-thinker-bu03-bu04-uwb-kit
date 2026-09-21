@@ -1,0 +1,48 @@
+{
+    "version": 1,
+    "timestamp": "2026-09-21 11:29:16",
+    "deviceParam": {
+        "command": "AT+GETCFG",
+        "id": 0,
+        "role": 0,
+        "channel": 0,
+        "rate": 0
+    },
+    "twrParam": {
+        "command": "AT+GETDEV",
+        "tagCapacity": 2,
+        "antennaDelay": 0,
+        "isKalmanFilterEnabled": false,
+        "kalmanQ": 0.0,
+        "kalmanR": 0.0,
+        "correctionParameterA": 1.0,
+        "correctionParameterB": 0.0,
+        "isPositioningEnabled": true,
+        "positioningDimension": 795110505
+    },
+    "pdoaParam": {
+        "command": "AT+PDOAGETCFG",
+        "dlist": 0,
+        "klist": 0,
+        "net": 0,
+        "anchId": 0,
+        "rate": 0,
+        "isFilterEnabled": false,
+        "userCmd": 0,
+        "pdoaOffset": 0,
+        "rngOffset": 0
+    },
+    "workMode": {
+        "command": "AT+GETWORKMODE",
+        "workMode": 0
+    },
+    "uwbMode": {
+        "command": "AT+GETUWBMODE",
+        "uwbMode": 0
+    },
+    "pdoaMisc": {
+        "fw_version": "",
+        "dlist": "J\r008D{\"Info\":{\r\n\"Device\":\"PDOA Node\",\r\n\"Version\":\"V1.0.0\",\r\n\"Build\":\"Jul 19 2024 15:13:27\",\r\n\"Driver\":\"DW3000 C0 Device Driver Version 04.00.00\"}}\r\n\nOK\r\n加入网络超时或者接收错误\n",
+        "klist": "{\rDList\":[ ]}\nOK\r\n加入网络超时或者接收错误\n"
+    }
+}
